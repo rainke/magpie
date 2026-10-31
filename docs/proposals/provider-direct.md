@@ -1,7 +1,7 @@
 # Proposal: a provider the agent reaches directly
 
 Status: partly implemented. OpenCode (and the agents that share its config
-shape), Claude Code and Codex support direct providers. What is built is under [Built so far](#built-so-far);
+shape), Pi, Claude Code and Codex support direct providers. What is built is under [Built so far](#built-so-far);
 the rest of this page is the change as a whole. Owner decisions are under
 [Decisions](#decisions).
 
@@ -32,9 +32,14 @@ provider entry of their own.
    agents (OpenCode, MiMo Code, DevEco Code), since magpie writes their
    provider entry as an openai-compatible chat endpoint. A model the provider
    serves only on Messages or Responses stays in magpie's entry, where the
-   gateway translates it. Claude Code speaks Messages and Codex speaks Responses; each selects one provider as its default route.
+   gateway translates it. Pi takes Chat, Responses and Messages, one per
+   model (`openai-completions`, `openai-responses`, `anthropic-messages`),
+   but not Gemini: apps that run Pi's SDK on Pi's own folder hand each
+   request a fetch pi-ai's Google adapter refuses, so a Gemini-only model
+   stays in magpie's entry. Claude Code speaks Messages and Codex speaks
+   Responses; each selects one provider as its default route.
 5. **The tick names the agent's catalog id.** `DirectAgents` holds `opencode`,
-   `mimocode`, `deveco`, `claude` or `codex`, so a WSL twin is written with its Windows twin and
+   `mimocode`, `deveco`, `pi`, `claude` or `codex`, so a WSL twin is written with its Windows twin and
    the entry's models are the same in both.
 
 ## Eligibility
@@ -179,27 +184,33 @@ A CLI (`magpie provider direct <id> on|off [agent…]`, listed by
 ## Built so far
 
 - `provider.DirectAgents`, `DirectOffered`, `DirectRefusal`, `DirectAPI`,
-  `DirectModels`, `DirectID`/`DirectOf` and `NormalDirectAgents`
-  ([`direct.go`](../../internal/provider/direct.go)); the field is kept by a
-  save that leaves it out.
+  `DirectModels`, `DirectModelList`, `DirectID`/`DirectOf` and
+  `NormalDirectAgents` ([`direct.go`](../../internal/provider/direct.go)); the
+  field is kept by a save that leaves it out.
 - `agent.Direct` on the OpenCode-shaped agents; `syncDirectOpenCode` writes
   `provider.magpie-direct-<id>` and removes the ones no longer wanted,
   `directModels` leaves those models out of magpie's entry, `directValue`
   makes a model picked on one count as magpie's (so it is `Wired`, and
   Disconnect is offered), and `Unwire` takes the entries out on Disconnect
   ([`direct.go`](../../internal/agent/direct.go)).
+- Pi takes any number of providers, each model on its own API and address:
+  `syncDirectPi` writes `providers.magpie-direct-<id>` in models.json with
+  Pi's own model entry fields, `piDirectIDs` leaves those models out of
+  `providers.magpie`, and `piScopeDirectWithout` takes a gone entry's refs
+  out of `enabledModels`
+  ([`pi_direct.go`](../../internal/agent/pi_direct.go)). A WSL distro's Pi is
+  written at the same place in its own home.
 - The provider editor's `Direct in agents` fold, its refusals and its ticks
   (`directField` in `app.js`), `POST /api/provider/save` taking
   `directAgents`, and `GET /api/providers` telling the editor
   `directOffered`, `directRefusal` and one `direct` row per agent.
-- Tests: `TestDirect*` in `internal/provider`, `TestOpenCodeDirect*` in
-  `internal/agent`, `TestProviderDirectAgents` in `internal/gui`, and
-  `internal/gui/tests/provider-direct.test.cjs`.
+- Tests: `TestDirect*` in `internal/provider`, `TestOpenCodeDirect*` and
+  `TestPiDirect*` in `internal/agent`, `TestProviderDirectAgents` in
+  `internal/gui`, and `internal/gui/tests/provider-direct.test.cjs`.
 - Claude Code and Codex have a single direct provider, with their previous route restored when the binding is removed; see [agent wiring](../subsystems/agent-wiring.md).
-- Not built yet: the remaining agents; an entry per model's API (OpenCode speaks
-  Chat only, so a per-model API is not written there); the CLI; a filter of
-  gateway-served model lists; and the **No proxy** rename of the proxy
-  picker's no-proxy value, so the editor still has two values called Direct.
+- Not built yet: the remaining agents; the CLI; a filter of gateway-served
+  model lists; and the **No proxy** rename of the proxy picker's no-proxy
+  value, so the editor still has two values called Direct.
 
 ## Verification
 
@@ -241,7 +252,8 @@ platform.
    written and removed, the list subtraction, Disconnect, end to end.
    **Built**, for every OpenCode-shaped agent at once.
 3. One commit per further agent, each with its own tests; WSL in the same
-   commit as its agent.
+   commit as its agent. Claude Code and Codex are **built** as single-upstream
+   bindings; Pi is **built** with an API per model.
 4. Docs: `agent-wiring.md` gains "A provider of the agent's own", and
    `providers-accounts.md` gains the field and the eligibility table.
 

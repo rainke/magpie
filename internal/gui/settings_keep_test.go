@@ -197,6 +197,8 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 	was.RequestArchiveLocal, was.RequestArchiveLocalMB = true, 256
 	was.ProxyCustom = "http://me:secret@proxy.example:8080"
 	was.PanelShortcut = "Ctrl+Alt+K"
+	// set on its own (POST /api/settings/search-all)
+	was.SearchAll = true
 	if err := settings.Save(was); err != nil {
 		t.Fatal(err)
 	}

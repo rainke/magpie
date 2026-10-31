@@ -15,6 +15,85 @@ import (
 	"github.com/yetone/magpie/internal/provider"
 )
 
+// Pi takes the same fold: offered while it is connected, saved, written
+// into its models.json, and taken out again when unticked.
+func TestProviderDirectAgentsPi(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	dir := filepath.Join(home, "pi-agent")
+	t.Setenv("PI_CODING_AGENT_DIR", dir)
+	mux := http.NewServeMux()
+	providerRoutes(mux, nil)
+	post := func(body string) (int, string) {
+		t.Helper()
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, httptest.NewRequest("POST", "/api/provider/save", strings.NewReader(body)))
+		return w.Code, w.Body.String()
+	}
+	relay := func() providerJSON {
+		t.Helper()
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/providers", nil))
+		var s providersJSON
+		if err := json.Unmarshal(w.Body.Bytes(), &s); err != nil {
+			t.Fatalf("%v\n%s", err, w.Body.String())
+		}
+		for _, p := range s.Providers {
+			if p.ID == "relay" {
+				return p
+			}
+		}
+		t.Fatal("relay not listed")
+		return providerJSON{}
+	}
+	if code, out := post(`{"id":"relay","name":"Relay","key":"k-1","chat":"https://relay.example.test/v1","models":["m1"],"new":true}`); code != 200 {
+		t.Fatalf("%d %s", code, out)
+	}
+	if err := catalog.SaveLive("relay", "https://relay.example.test/v1", []catalog.Model{{ID: "m1", Context: 128000}}); err != nil {
+		t.Fatal(err)
+	}
+	a, err := agent.Find("pi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(a.Path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Connect(); err != nil {
+		t.Fatal(err)
+	}
+	info := relay()
+	if !slices.ContainsFunc(info.Direct, func(d directAgentJSON) bool { return d.ID == "pi" && d.API == "chat" && d.Why == "" }) {
+		t.Fatalf("offered %+v, want Pi on chat", info.Direct)
+	}
+	if code, out := post(`{"id":"relay","from":"relay","name":"Relay","chat":"https://relay.example.test/v1","models":["m1"],"directAgents":["pi"]}`); code != 200 {
+		t.Fatalf("%d %s", code, out)
+	}
+	agent.SyncCatalogSettled()
+	models := filepath.Join(dir, "models.json")
+	b, err := os.ReadFile(models)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"magpie-direct-relay"`) {
+		t.Fatalf("nothing written into Pi's models.json:\n%s", b)
+	}
+	if code, out := post(`{"id":"relay","from":"relay","name":"Relay","chat":"https://relay.example.test/v1","models":["m1"],"directAgents":[]}`); code != 200 {
+		t.Fatalf("%d %s", code, out)
+	}
+	agent.SyncCatalogSettled()
+	b, err = os.ReadFile(models)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), `"magpie-direct-relay"`) {
+		t.Fatalf("unticked, still in Pi's models.json:\n%s", b)
+	}
+}
+
 // A provider of the user's own is offered to the agents that can take it
 // (OpenCode), saved with them, and written into that agent's own config; a
 // save that leaves the tick out keeps it, and an agent or a provider that

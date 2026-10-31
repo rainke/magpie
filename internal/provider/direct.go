@@ -105,26 +105,72 @@ func (p Provider) DirectAPI(protos []Protocol) Protocol {
 // The price is the vendor's list price, not what magpie counts: no price rate
 // or agent pricing stands between the agent and the vendor.
 func (p Provider) DirectModels(api Protocol) []catalog.Model {
-	s := settings.Load()
 	var out []catalog.Model
+	for _, dm := range p.DirectModelList([]Protocol{api}) {
+		if dm.API == api {
+			out = append(out, dm.Model)
+		}
+	}
+	return out
+}
+
+// DirectModel is one of a provider's models as an agent whose own entry takes
+// an API per model carries it (Pi's api and baseUrl per model): the model,
+// and the API it is written on.
+type DirectModel struct {
+	Model catalog.Model
+	API   Protocol
+}
+
+// DirectModelList lists p's models as an agent that speaks protos takes them
+// when its entry carries an API per model (Pi's api and baseUrl per model),
+// in p's list order: each on the first of its APIs that agent speaks and
+// p's first key may be used on, less the disabled ones. A model with no such
+// API is left out, staying in magpie's entry, where the gateway translates
+// it. DirectModels is this for one API.
+func (p Provider) DirectModelList(protos []Protocol) []DirectModel {
+	s := settings.Load()
+	var out []DirectModel
 	for _, m := range p.Exposed() {
 		if _, off := ModelDisabled(p.ID, m.ID); off {
 			continue
 		}
-		if apis := p.APIs(m.ID); len(apis) > 0 && !slices.Contains(apis, api) {
+		api := p.directModelAPI(m.ID, protos)
+		if api == "" {
 			continue
 		}
 		ctx := p.ContextOf(m.ID)
 		if ctx == 0 {
 			ctx = m.Context
 		}
-		out = append(out, catalog.Model{
+		out = append(out, DirectModel{API: api, Model: catalog.Model{
 			ID: m.ID, Name: cmp.Or(m.Name, m.ID), Context: ctx, Output: p.replyLimit(m, s),
 			Efforts: m.Efforts, Reasoning: m.Reasoning, Images: m.Images, Price: m.Price,
 			Released: m.Released,
-		})
+		}})
 	}
 	return out
+}
+
+// directModelAPI is the API model is written on into an agent that speaks
+// protos: the first of its APIs (APIs) that the agent speaks and p's first
+// key may be used on, p.Speaks() when the model's APIs aren't known; "" when
+// there is none.
+func (p Provider) directModelAPI(model string, protos []Protocol) Protocol {
+	apis := p.APIs(model)
+	if len(apis) == 0 {
+		apis = p.Speaks()
+	}
+	for _, pr := range apis {
+		if !slices.Contains(protos, pr) || p.Base(pr) == "" {
+			continue
+		}
+		if p.KeyProtocol != "" && p.KeyProtocol != pr {
+			continue
+		}
+		return pr
+	}
+	return ""
 }
 
 // ProtocolName is an API's name as the editor and its errors say it: chat,

@@ -537,7 +537,13 @@ func magpieProviderJSONAt(shape, catalog, gw string) any {
 		return map[string]any{"type": "openai", "name": "magpie", "base_url": gw + "/v1", "api_key": keyAt(gw), "models": ms}
 	case "pi":
 		var ms []map[string]any
+		// a model written into Pi as one of a provider's own is there,
+		// not here: its list has each model once
+		direct := piDirectIDs(catalog)
 		for _, m := range models {
+			if direct[m.ID] {
+				continue
+			}
 			ms = append(ms, piModelJSON(piAsked(catalog, m), gw, true))
 		}
 		if ms == nil {
@@ -1232,6 +1238,7 @@ func pi(home string) *Agent { return piIn(here(home)) }
 func piIn(at place) *Agent {
 	a := piLike(at, "pi", "Pi", piDir(at))
 	a.UA = []string{"pi-"}
+	piDirect(a)
 	return a
 }
 
@@ -1434,7 +1441,18 @@ func piLikeKeyed(at place, id, name, dir string, key func() string) *Agent {
 					return piScopeWith(path, v)
 				},
 				Options: func(cur map[string]string) []Option {
-					return append(ownOptionsFrom(piRegistry(id), auth, cur["model"]), viaMagpie(id, magpieID+"/")...)
+					opts := ownOptionsFrom(piRegistry(id), auth, cur["model"])
+					// a model written into a provider of Pi's own is there,
+					// not in magpie's entry: picking it here would name a
+					// model magpie's list no longer has
+					direct := piDirectIDs(id)
+					for _, o := range viaMagpie(id, magpieID+"/") {
+						if direct[strings.TrimPrefix(o.Value, magpieID+"/")] {
+							continue
+						}
+						opts = append(opts, o)
+					}
+					return opts
 				},
 			},
 			{

@@ -142,6 +142,57 @@ func TestDirectModels(t *testing.T) {
 	}
 }
 
+// DirectModelList is DirectModels for an agent whose entry takes an API per
+// model (Pi's api and baseUrl per model): each model on the first API it is
+// served on out of the ones the agent speaks, or none, which stays on
+// magpie. The first key's protocol still narrows it.
+func TestDirectModelList(t *testing.T) {
+	chat, anth := "https://relay.example.test/v1", "https://relay.example.test"
+	if err := Save(Provider{
+		ID: "relay", Name: "Relay", Key: "k", Chat: chat, Responses: chat, Anthropic: anth,
+		Models: []string{"chat-only", "claude", "both", "any"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.SaveLive("relay", chat, []catalog.Model{
+		{ID: "chat-only", APIs: []string{string(Chat)}},
+		{ID: "claude", APIs: []string{string(Anthropic)}},
+		{ID: "both", APIs: []string{string(Anthropic), string(Chat)}},
+		{ID: "any"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Find("relay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := func() []string {
+		var out []string
+		for _, dm := range p.DirectModelList([]Protocol{Chat, Anthropic}) {
+			out = append(out, dm.Model.ID+"@"+string(dm.API))
+		}
+		return out
+	}
+	if want := []string{"chat-only@chat", "claude@anthropic", "both@anthropic", "any@chat"}; !slices.Equal(got(), want) {
+		t.Errorf("%v, want %v", got(), want)
+	}
+	q := *p
+	q.KeyProtocol = Anthropic
+	if got := func() []string {
+		var out []string
+		for _, dm := range q.DirectModelList([]Protocol{Chat, Anthropic}) {
+			out = append(out, dm.Model.ID+"@"+string(dm.API))
+		}
+		return out
+	}(); !slices.Equal(got, []string{"claude@anthropic", "both@anthropic", "any@anthropic"}) {
+		t.Errorf("first key on messages: %v", got)
+	}
+	// an agent that speaks Gemini alone gets none of these
+	if ms := p.DirectModelList([]Protocol{Gemini}); len(ms) != 0 {
+		t.Errorf("Gemini: %v", ms)
+	}
+}
+
 func TestNormalDirectAgents(t *testing.T) {
 	got := NormalDirectAgents([]string{" opencode ", "", "opencode", "mimocode"})
 	if want := []string{"opencode", "mimocode"}; !slices.Equal(got, want) {
