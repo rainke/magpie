@@ -54,7 +54,10 @@ func SyncCatalog() {
 		for _, a := range All() {
 			// a provider named magpie written by hand is the user's, its
 			// model list too (handWired)
-			if a.Sync != nil && !a.handWired() && (!a.ListOnly || a.Wired()) {
+			// a provider magpie wrote into the agent for one of the
+			// user's is kept in step even while the agent is on a model
+			// of its own (Owned)
+			if a.Sync != nil && !a.handWired() && (!a.ListOnly || a.Wired() || a.Owned != nil && a.Owned()) {
 				_ = synced(a.Sync)
 			}
 			// a field magpie set to a found group's id before (autoref.go)

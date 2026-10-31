@@ -323,6 +323,11 @@ func openCodeSpelled(path string, v1 func() string) func(string) bool {
 		if !ok || p == "" {
 			return false
 		}
+		// a provider magpie wrote into the agent for one of the user's
+		// (provider.DirectID): its own entry, whatever it holds
+		if provider.DirectOf(p) != "" {
+			return true
+		}
 		if !strings.Contains(p, ".") {
 			base, _ := edit.GetJSON(path, "provider."+p+".options.baseURL")
 			return sameGateway(base, v1())
@@ -490,32 +495,14 @@ func magpieProviderJSONAt(shape, catalog, gw string) any {
 	switch shape {
 	case "opencode":
 		ms := map[string]any{}
+		// a model written into the agent as one of a provider's own is
+		// there, not here: its list has each model once
+		direct := directModels(catalog, openCodeDirectProtos)
 		for _, m := range models {
-			e := map[string]any{"name": m.Name}
-			// modalities alone says a model takes images: OpenCode 1 takes
-			// its image input from them, and its attachment flag, which
-			// nothing of OpenCode 1.18 reads, is a legacy field OpenCode 2
-			// drops with a WARN per model on every load (#2209)
-			if m.Images {
-				e["modalities"] = map[string]any{"input": []string{"text", "image"}, "output": []string{"text"}}
+			if direct[m.ID] {
+				continue
 			}
-			// without it OpenCode doesn't know when to compact, and a
-			// group's context (magpie group set … context=) never reaches
-			// it; an output of 0 is OpenCode's own default
-			if m.Context > 0 {
-				e["limit"] = map[string]any{"context": m.Context, "output": maxTokens(m)}
-			}
-			if openCodeReasons(m) {
-				e["reasoning"] = true
-			}
-			e["variants"] = openCodeVariants(m.Efforts, m.CodexFast)
-			// OpenCode counts a session's cost by it, in USD per million
-			// tokens (models.dev's cost; OpenCode 2.0.25 reads input,
-			// output, cache_read, cache_write), and counted 0 without it
-			if p := m.Price; p != nil {
-				e["cost"] = map[string]any{"input": p.Input, "output": p.Output, "cache_read": p.CacheRead, "cache_write": p.CacheWrite}
-			}
-			ms[m.ID] = e
+			ms[m.ID] = openCodeModel(m)
 		}
 		return map[string]any{"npm": "@ai-sdk/openai-compatible", "name": "magpie",
 			"options": map[string]any{"baseURL": gw + "/v1", "apiKey": openCodeKeyAt(catalog, gw)}, "models": ms}
@@ -590,6 +577,44 @@ func piBlockKept(path string, value func() any) func() any {
 	}, "models")
 }
 
+// openCodeModel is one model as an entry of an OpenCode-shaped agent's
+// provider block, magpie's or one of a provider's own (openCodeDirectJSON):
+// its name, the images it takes, the window it compacts at, its levels as
+// variants, and the price OpenCode counts a session's cost by.
+func openCodeModel(m catalog.Model) map[string]any {
+	e := map[string]any{"name": m.Name}
+	// modalities alone says a model takes images: OpenCode 1 takes its
+	// image input from them, and its attachment flag, which nothing of
+	// OpenCode 1.18 reads, is a legacy field OpenCode 2 drops with a WARN
+	// per model on every load (#2209)
+	if m.Images {
+		e["modalities"] = map[string]any{"input": []string{"text", "image"}, "output": []string{"text"}}
+	}
+	// without it OpenCode doesn't know when to compact, and a group's
+	// context (magpie group set … context=) never reaches it; an output
+	// of 0 is OpenCode's own default
+	if m.Context > 0 {
+		e["limit"] = map[string]any{"context": m.Context, "output": maxTokens(m)}
+	}
+	if openCodeReasons(m) {
+		e["reasoning"] = true
+	}
+	e["variants"] = openCodeVariants(m.Efforts, m.CodexFast)
+	// OpenCode counts a session's cost by it, in USD per million tokens
+	// (models.dev's cost; OpenCode 2.0.25 reads input, output, cache_read,
+	// cache_write), and counted 0 without it
+	if p := m.Price; p != nil {
+		e["cost"] = map[string]any{"input": p.Input, "output": p.Output, "cache_read": p.CacheRead, "cache_write": p.CacheWrite}
+	}
+	return e
+}
+
+// openCodeDirectProtos are the APIs an OpenCode-shaped agent's own provider
+// entry speaks: an openai-compatible chat endpoint, and nothing else. A
+// model of a provider's that is served on Messages or Responses alone stays
+// in magpie's entry, where the gateway translates it.
+var openCodeDirectProtos = []provider.Protocol{provider.Chat}
+
 // openCodeKept is theirsKept for magpie's provider in an OpenCode config at
 // path: magpie's models are its own, written whole, but a variant the user
 // put on one of them stays (#2379), where it is or after magpie's, and one
@@ -597,9 +622,16 @@ func piBlockKept(path string, value func() any) func() any {
 // writes it under its name is magpie's: one the model has no longer, a
 // level gone or a fast mode lost, goes.
 func openCodeKept(path string, value func() any) func() any {
-	return theirsKept(path, "provider."+magpieID, func() any {
+	return openCodeEntryKept(path, "provider."+magpieID, value)
+}
+
+// openCodeEntryKept is openCodeKept for the provider entry at key: magpie's
+// own (magpieID), or one of a provider of the user's written direct
+// (provider.DirectID).
+func openCodeEntryKept(path, key string, value func() any) func() any {
+	return theirsKept(path, key, func() any {
 		v := value()
-		raw, ok := edit.GetJSON(path, "provider."+magpieID+".models")
+		raw, ok := edit.GetJSON(path, key+".models")
 		if !ok {
 			return v
 		}
@@ -965,7 +997,7 @@ func openCodeLike(at place, id, name, icon, bin, dir, auth string, ua []string, 
 			break
 		}
 	}
-	provider := openCodeKept(path, func() any { return magpieProviderJSONAt("opencode", id, at.gw()) })
+	magpieProvider := openCodeKept(path, func() any { return magpieProviderJSONAt("opencode", id, at.gw()) })
 	opts := func(key string) func(map[string]string) []Option {
 		return func(cur map[string]string) []Option {
 			return append(ownOptions(auth, cur[key]), viaMagpie(id, magpieID+"/")...)
@@ -1001,6 +1033,11 @@ func openCodeLike(at place, id, name, icon, bin, dir, auth string, ua []string, 
 		UA:  ua,
 		Bin: bin, Dir: dir, Path: path,
 		Check: func() string {
+			if openCodeOwnsDirect(path) {
+				if err := provider.FileError(); err != nil {
+					return err.Error()
+				}
+			}
 			if !usesMagpie(get("model"), get("small_model")) {
 				return ""
 			}
@@ -1008,14 +1045,27 @@ func openCodeLike(at place, id, name, icon, bin, dir, auth string, ua []string, 
 				"baseURL", at.v1(), "apiKey", openCodeKeyAt(id, at.gw()))
 		},
 		ListOnly: true,
+		// the providers of the user's written into this agent as its own
+		// (DirectAgents): an openai-compatible chat endpoint, OpenCode's
+		// own shape
+		Direct: openCodeDirectProtos,
 		Sync: func() error {
+			if err := provider.FileError(); err != nil {
+				return err
+			}
 			// a model of magpie's chosen, but its provider gone from the
 			// file: put it back, or the agent has nothing to send it to
 			if _, ok := edit.GetJSON(path, "provider."+magpieID); !ok && onMagpie() {
-				return edit.SetJSON(path, edit.KV{Path: "provider." + magpieID, Value: provider()})
+				if err := edit.SetJSON(path, edit.KV{Path: "provider." + magpieID, Value: magpieProvider()}); err != nil {
+					return err
+				}
+			} else if err := syncJSONInOrder(path, "provider."+magpieID, magpieProvider); err != nil {
+				return err
 			}
-			return syncJSONInOrder(path, "provider."+magpieID, provider)
+			return syncDirectOpenCode(path, id, openCodeDirectProtos)
 		},
+		Unwire: func() error { return clearDirectProviders(path) },
+		Owned:  func() bool { return openCodeOwnsDirect(path) },
 		Fields: []Field{
 			{Key: "model", Label: "model", Get: jsonGet(path, "model"), Set: set("model"), Options: opts("model")},
 			{Key: "small", Label: "small", Get: jsonGet(path, "small_model"), Set: set("small_model"), Options: opts("small")},

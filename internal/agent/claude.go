@@ -2274,6 +2274,7 @@ func claudeIn(at place) *Agent {
 			return noticeClaudeEffort.String()
 		},
 	}
+	singleDirect(self, at, provider.Anthropic)
 	return self
 }
 

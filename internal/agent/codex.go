@@ -2004,6 +2004,7 @@ func codexIn(at place) *Agent {
 		a.viaProxy = func() (bool, bool, string, string) { return codexThroughProxy(path, at.gw()) }
 		a.move = func(from, to string) error { return codexMoveGateway(path, from, to) }
 	}
+	singleDirect(a, at, provider.Responses)
 	return a
 }
 

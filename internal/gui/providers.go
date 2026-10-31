@@ -136,6 +136,15 @@ type providerJSON struct {
 	// the proxy of each of a subscription's accounts that has one of its
 	// own, by its name in lower case; the others follow Proxy
 	AccountProxies map[string]string `json:"accountProxies,omitempty"`
+	// the agents this provider is written into as their own, so they ask it
+	// themselves (provider.Provider.DirectAgents), and what the editor
+	// offers: DirectOffered for a provider of the user's own, DirectRefusal
+	// when it can't be handed over whole, and Direct, one row per agent that
+	// can take it, with the API it would be written on or why it can't
+	DirectAgents  []string          `json:"directAgents,omitempty"`
+	DirectOffered bool              `json:"directOffered,omitempty"`
+	DirectRefusal string            `json:"directRefusal,omitempty"`
+	Direct        []directAgentJSON `json:"direct,omitempty"`
 	// the models each account or key the user narrowed serves alone, by
 	// its name in lower case or its key's id (#474); the others serve all
 	AccountModels map[string][]string `json:"accountModels,omitempty"`
@@ -295,6 +304,16 @@ type providerJSON struct {
 	// Move is where a built-in subscription stands with the community
 	// plugin that can run it (provider.Move): set for those that have one
 	Move *moveJSON `json:"move,omitempty"`
+}
+
+// directAgentJSON is one agent's row of a provider's "Direct in agents"
+// fold: the API its own provider entry would be written on, or why it can't
+// be (the provider serves no API it speaks, or its first key is for another).
+type directAgentJSON struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	API  string `json:"api,omitempty"`
+	Why  string `json:"why,omitempty"`
 }
 
 type moveJSON struct {
@@ -635,6 +654,21 @@ func desktopNumbers(agents []agentUse) map[string]string {
 	return out
 }
 
+// checkDirectAgents is the editor's check before a provider is saved with
+// agents written into as their own: the provider can be handed over whole
+// (provider.DirectRefusal), and each agent named can take it
+// (agent.CheckDirectAgents).
+func checkDirectAgents(in provider.Provider) error {
+	in.DirectAgents = provider.NormalDirectAgents(in.DirectAgents)
+	if len(in.DirectAgents) == 0 {
+		return nil
+	}
+	if why := in.DirectRefusal(); why != "" {
+		return errors.New(why)
+	}
+	return agent.CheckDirectAgents(in)
+}
+
 func providerInfo(p provider.Provider, agents []agentUse) providerJSON {
 	return providerInfoWith(p, agents, desktopNumbers(agents))
 }
@@ -676,6 +710,32 @@ func providerInfoWith(p provider.Provider, agents []agentUse, desktop map[string
 	if p.Account == nil {
 		for _, s := range p.Speaks() {
 			out.Speaks = append(out.Speaks, string(s))
+		}
+	}
+	if p.DirectOffered() {
+		out.DirectOffered, out.DirectAgents, out.DirectRefusal = true, p.DirectAgents, p.DirectRefusal()
+		for _, u := range agents {
+			a := u.Agent
+			if a == nil || a.WSL != "" || len(a.Direct) == 0 {
+				continue
+			}
+			// a connected one, or one already written into: so a tick the
+			// provider can no longer serve is shown, and can be taken off
+			if !a.Wired() && !slices.Contains(p.DirectAgents, a.ID) {
+				continue
+			}
+			d := directAgentJSON{ID: a.ID, Name: a.Name}
+			if other := agent.DirectBindingConflict(p.ID, a.ID); other != "" {
+				d.Why = fmt.Sprintf("%s is already bound directly to %s; remove that binding first", a.Name, other)
+			} else if api := p.DirectAPI(a.Direct); api != "" {
+				d.API = string(api)
+			} else if slices.ContainsFunc(p.Speaks(), func(pr provider.Protocol) bool { return slices.Contains(a.Direct, pr) }) {
+				d.Why = fmt.Sprintf("%s's first key is for %s alone", p.Name, provider.ProtocolName(p.KeyProtocol))
+			} else {
+				d.Why = fmt.Sprintf("%s speaks %s, and %s serves %s", a.Name,
+					provider.ProtocolNames(a.Direct), p.Name, provider.ProtocolNames(p.Speaks()))
+			}
+			out.Direct = append(out.Direct, d)
 		}
 	}
 	if out.Chosen == nil {
@@ -1378,6 +1438,11 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			// BestInFamily, for save: the editor's Best in family, kept
 			// with no model picked; a save that leaves it out keeps it
 			BestInFamily *bool `json:"bestInFamily"`
+			// DirectAgents, for save: the agents the provider is written
+			// into as their own (provider.Provider.DirectAgents); a save
+			// that leaves it out keeps it, as one from a page without the
+			// fold does
+			DirectAgents *[]string `json:"directAgents"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			fail(rw, err)
@@ -1606,6 +1671,10 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				if req.LimitRestOff != nil {
 					in.LimitRestOff = *req.LimitRestOff
 				}
+				if err := checkDirectAgents(in); err != nil {
+					fail(rw, err)
+					return
+				}
 				add := provider.Add
 				if req.CopyOf != "" {
 					add = func(p provider.Provider) (string, error) { return provider.AddCopy(p, req.CopyOf) }
@@ -1821,9 +1890,26 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 					fail(rw, fmt.Errorf("%s can't carry Codex's native compaction: only a provider with a Responses API, a ChatGPT account or GitHub Copilot can", cmp.Or(in.Name, in.ID)))
 					return
 				}
+				// the agents it is written into as their own: a save that
+				// leaves them out keeps them, and one this provider can't
+				// be written into is refused (provider.DirectRefusal)
+				if req.DirectAgents != nil {
+					in.DirectAgents = *req.DirectAgents
+				} else if old != nil {
+					in.DirectAgents = old.DirectAgents
+				}
+				if err := checkDirectAgents(in); err != nil {
+					fail(rw, err)
+					return
+				}
 				if err := provider.Save(in); err != nil {
 					fail(rw, err)
 					return
+				}
+				// the agents' own configs follow what it is written into:
+				// an entry added or taken out now, not at the next round
+				if old == nil || !slices.Equal(old.DirectAgents, in.DirectAgents) {
+					agent.SyncCatalogSoon()
 				}
 				if rename {
 					if _, err := agent.RenameProvider(in.ID, to); err != nil {

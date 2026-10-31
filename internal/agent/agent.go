@@ -134,6 +134,13 @@ type Agent struct {
 	// UA is what the agent's User-Agent begins with, lower-case: how the
 	// gateway tells its requests from others'
 	UA []string
+	// Direct are the APIs this agent's own provider entry can speak, in its
+	// own shape: the ones a provider of the user's may be written on into it
+	// (provider.DirectAPI), so the agent asks that provider itself rather
+	// than through magpie (provider.Provider.DirectAgents). nil: it can't be
+	// written into, and the editor offers none for it.
+	// See docs/proposals/provider-direct.md.
+	Direct []provider.Protocol
 	// ListsModels: the agent's own model menu is magpie's models as picked
 	// on the Agents page for it (settings.HiddenModels, PickedModels),
 	// though no field of its picks among the catalog: the gateway's
@@ -186,6 +193,15 @@ type Agent struct {
 	// own written in by the agent: still connected, as joined (#940), and
 	// a pick in the agent rather than drift (#2424).
 	Beside func() bool
+	// Owned reports that the agent's config holds a provider magpie wrote
+	// for one of the user's own (provider.DirectID), even while the agent
+	// is on a model of its own: SyncCatalog keeps its Sync going, so an
+	// untick, a switched-off provider or a key changed still reaches the
+	// entry. See docs/proposals/provider-direct.md.
+	Owned func() bool
+	// DirectActive means the agent's current route is its single direct
+	// provider; gateway reachability and usage do not apply to it.
+	DirectActive func() bool
 	// OwnVia is the catalog id magpie serves one of the agent's own models
 	// by on a sign-in of the user's, which its model field lists as its
 	// own rather than as magpie's ("codex/gpt-5.5" for Codex's gpt-5.5),

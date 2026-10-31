@@ -194,6 +194,11 @@ func (a *Agent) Drift() *Drift {
 			return &Drift{Kind: "unwired", Field: on.Key, Now: vals[on.Key], Want: vals[on.Key], Detail: d}
 		}
 	}
+	// A direct provider is expected to bypass the gateway; its own config
+	// was checked above, so gateway reachability and usage say nothing here.
+	if a.DirectActive != nil && a.DirectActive() {
+		return nil
+	}
 	rec := appliedOf(a.ID)
 	// still joined, a model off magpie is one picked in the agent, beside
 	// magpie's in its list (dsh's /model), not a change from outside; so is
@@ -304,6 +309,11 @@ func magpieValue(a *Agent, f Field, v string, vals map[string]string) bool {
 	// spelled as magpie's provider in the agent's own config (OpenCode's
 	// magpie/…): magpie's even when its list there doesn't have the model
 	if ref, ok := strings.CutPrefix(v, magpieID+"/"); ok && isMagpie(ref) {
+		return true
+	}
+	// a model of a provider magpie wrote into the agent as its own
+	// (provider.DirectID): magpie's wiring too, whatever the model
+	if directValue(v) {
 		return true
 	}
 	if f.Options == nil {

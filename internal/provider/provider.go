@@ -364,6 +364,15 @@ type Provider struct {
 	// "direct" none, anything else the proxy's address (http://, https://,
 	// socks5://; host:port means http). Signed-in accounts keep it too.
 	Proxy string `json:"proxy,omitempty"`
+	// DirectAgents names the agents this provider is written into as their
+	// own provider, so their requests for its models go to it rather than
+	// through magpie (docs/proposals/provider-direct.md): each agent's id,
+	// as agent.All names it (a WSL twin follows its agent's kind). The
+	// entry an agent gets carries the provider's address, its first key and
+	// the models it serves there (DirectModels). Only a provider of the
+	// user's own takes it (DirectOffered), and what magpie shapes about a
+	// request it can't carry (DirectRefusal).
+	DirectAgents []string `json:"directAgents,omitempty"`
 	// AccountProxies is, for a provider holding several accounts or keys
 	// (Codex's accounts, a relay's keys…), the proxy of each one that has
 	// one of its own, as Proxy takes one: an account by its name in lower
@@ -720,6 +729,7 @@ func (p Provider) clone() Provider {
 	p.Headers = maps.Clone(p.Headers)
 	p.ExtraBody = maps.Clone(p.ExtraBody)
 	p.ReplyHeaders = slices.Clone(p.ReplyHeaders)
+	p.DirectAgents = slices.Clone(p.DirectAgents)
 	p.AccountProxies = maps.Clone(p.AccountProxies)
 	p.AccountCaps = maps.Clone(p.AccountCaps)
 	p.AccountNames = maps.Clone(p.AccountNames)
@@ -1407,6 +1417,7 @@ func normalize(p Provider) Provider {
 	p.Patience = min(p.Patience, PatienceLongest)
 	p.Key = strings.TrimSpace(p.Key)
 	p.Proxy = strings.TrimSpace(p.Proxy)
+	p.DirectAgents = NormalDirectAgents(p.DirectAgents)
 	p.AccountProxies = normalAccountProxies(p.AccountProxies)
 	p.AccountModels = normalAccountModels(p.AccountModels)
 	p.AccountCaps = normalAccountCaps(p.AccountCaps)

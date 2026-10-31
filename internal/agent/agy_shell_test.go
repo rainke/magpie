@@ -48,6 +48,12 @@ func TestAgyShell(t *testing.T) {
 	}
 	for _, p := range in {
 		b, _ := os.ReadFile(p)
+		if filepath.Base(filepath.Dir(p)) == "fish" {
+			if s := string(b); !strings.HasPrefix(s, "# >>> magpie agy >>>\nfunction agy\n") || !strings.Contains(s, " agy run $argv") || !strings.HasSuffix(s, "end\n# <<< magpie agy <<<\n") {
+				t.Fatalf("%s:\n%s", p, s)
+			}
+			continue
+		}
 		if s := string(b); !strings.HasPrefix(s, mine+"\n# >>> magpie agy >>>\nfunction agy {\n") || !strings.Contains(s, ` agy run "$@"; else command agy "$@"; fi`) || !strings.HasSuffix(s, "}\n# <<< magpie agy <<<\n") {
 			t.Fatalf("%s:\n%s", p, s)
 		}

@@ -7867,6 +7867,24 @@ function proxyPicker() {
   return box;
 }
 
+// directField: the agents this provider is written into as their own (DirectAgents)
+function directField(p) {
+  const box = el("div", "stack direct-agents"), own = () => draft.directAgents || [];
+  box.append(el("div", "hint direct-note", t("Address and first key go into the agent's own config, and those requests go straight to it: magpie's routing, fallbacks, redaction, usage and limits don't apply.")));
+  if (p.directRefusal) box.append(el("div", "hint direct-refusal", p.directRefusal));
+  else if (!p.direct?.length) box.append(el("div", "hint direct-none", t("No connected agent can take it yet: connect OpenCode.")));
+  else for (const a of p.direct) {
+    const [tk, cb] = tick(t("Write it into {agent}", { agent: a.name }), own().includes(a.id));
+    tk.classList.add("direct-agent");
+    cb.disabled = !a.api && !cb.checked; // a tick it can no longer serve can be taken off
+    cb.onchange = () => { const rest = own().filter((x) => x !== a.id); draft.directAgents = cb.checked ? [...rest, a.id] : rest; };
+    box.append(tk);
+    if (a.id === "claude" && (a.api || cb.checked)) box.append(el("div", "hint", t("{agent} reads its model list as it starts: quit and reopen it after a change", { agent: a.name })));
+    if (a.why) box.append(el("div", "hint direct-why", a.why));
+  }
+  return field(t("Direct in agents"), box, "");
+}
+
 // concurrencyField: requests each key or account has out at once (Lemon:
 // Codex risk control past five); "" takes the plugin's, as its placeholder
 function concurrencyField(p) {
@@ -8050,7 +8068,7 @@ document.addEventListener("click", (e) => {
 // which opens it: none hides behind a fold
 function advancedSet(d, p) {
   return (d.headers || []).some(([k]) => (k || "").trim()) || !!(d.extraBody || "").trim() || !!(d.replyHeaders || "").trim() ||
-    !!d.proxyMode || Object.values(d.accountProxies || {}).some((x) => x?.mode) ||
+    !!d.proxyMode || !!d.directAgents?.length || Object.values(d.accountProxies || {}).some((x) => x?.mode) ||
     [d.concurrency, d.queueLimit, d.queueWait, d.maxRPM, d.priceRate, d.contexts, d.outputs, d.compacts].some((v) => String(v ?? "").trim()) ||
     !!d.rateWindows?.length ||
     !!(d.searches || d.authHeader || d.passUserAgent || d.unredacted || d.countFree || d.pinUpstream || d.nativeCompaction || d.balanceToken || d.limitRestOff) ||
@@ -9222,7 +9240,7 @@ function baseAPIOf(p) {
 
 // draftOf is a saved provider as its editor's form holds it.
 function draftOf(p) {
-  return { id: p.id, name: p.name, preset: p.preset, chat: p.chat, responses: p.responses, anthropic: p.anthropic, gemini: p.gemini || "", catalog: p.catalog, decide: p.decide || "", key: "", api: baseAPIOf(p), chosen: pickedOf(p), none: !!p.noModels, best: !!p.bestInFamily, extra: [], headers: headerRows(p.headers), extraBody: extraBodyText(p.extraBody), replyHeaders: (p.replyHeaders || []).join(", "), icon: p.icon || "", fallback: [...(p.fallback || [])], unlisted: !!p.unlisted, hiddenDrawers: [...(p.hiddenDrawers || [])], searches: !!p.searches, unredacted: !!p.unredacted, countFree: !!p.countFree, insecureTLS: !!p.insecureTLS, limitRestOff: !!p.limitRestOff, nativeCompaction: !!p.nativeCompaction, passUserAgent: !!p.passUserAgent, pinUpstream: !!p.pinUpstream, authHeader: p.authHeader || "", balanceURL: p.balanceURL || "", balancePath: p.balancePath || "", balanceMethod: p.balanceMethod || "", modelsURL: p.modelsURL || "", contexts: contextsText(p.contexts), outputs: contextsText(p.outputs), compacts: contextsText(p.compacts), keysUrl: p.keysUrl || "", ...proxyDraft(p), ...concurrencyDraft(p), rateWindows: (p.rateWindows || []).map((w) => ({ ...w })) };
+  return { id: p.id, name: p.name, preset: p.preset, chat: p.chat, responses: p.responses, anthropic: p.anthropic, gemini: p.gemini || "", catalog: p.catalog, decide: p.decide || "", key: "", api: baseAPIOf(p), chosen: pickedOf(p), none: !!p.noModels, best: !!p.bestInFamily, extra: [], headers: headerRows(p.headers), extraBody: extraBodyText(p.extraBody), replyHeaders: (p.replyHeaders || []).join(", "), icon: p.icon || "", fallback: [...(p.fallback || [])], unlisted: !!p.unlisted, hiddenDrawers: [...(p.hiddenDrawers || [])], searches: !!p.searches, unredacted: !!p.unredacted, countFree: !!p.countFree, insecureTLS: !!p.insecureTLS, limitRestOff: !!p.limitRestOff, directAgents: [...(p.directAgents || [])], nativeCompaction: !!p.nativeCompaction, passUserAgent: !!p.passUserAgent, pinUpstream: !!p.pinUpstream, authHeader: p.authHeader || "", balanceURL: p.balanceURL || "", balancePath: p.balancePath || "", balanceMethod: p.balanceMethod || "", modelsURL: p.modelsURL || "", contexts: contextsText(p.contexts), outputs: contextsText(p.outputs), compacts: contextsText(p.compacts), keysUrl: p.keysUrl || "", ...proxyDraft(p), ...concurrencyDraft(p), rateWindows: (p.rateWindows || []).map((w) => ({ ...w })) };
 }
 
 // duplicateProvider opens the Add form on a copy of p (#268): its URLs,
@@ -9768,6 +9786,8 @@ function drawEditor(p, presetID) {
   const perKey = keyProxyPicker(p);
   if (perKey) proxies.append(perKey);
   advIn.append(...field(t("Proxy"), proxies));
+  // a provider of the user's own can be an agent's own provider
+  if (p?.directOffered) advIn.append(...directField(p));
   advIn.append(...concurrencyField(p));
   advIn.append(...priceRateField(), ...countFreeField(), ...rateWindowsField());
 
@@ -10205,6 +10225,9 @@ function drawEditor(p, presetID) {
     }
     body.proxy = proxyOfDraft();
     if (body.proxy === null) return proxyError(ed);
+    // a provider edited where the fold is shown says which agents are its;
+    // one saved without the fold keeps what it had
+    if (p?.directOffered) body.directAgents = [...(draft.directAgents || [])];
     if (perKey) {
       const own = accountProxiesOfDraft();
       if (own.missing) {
